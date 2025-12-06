@@ -7,6 +7,7 @@ interface UseKeyboardNavigationProps {
   sentencesLength: number;
   currentSentenceIndex: number;
   setCurrentSentenceIndex: (index: number | ((prev: number) => number)) => void;
+  scrollToCurrentSentence?: () => void;
 }
 
 export const useKeyboardNavigation = ({
@@ -15,6 +16,7 @@ export const useKeyboardNavigation = ({
   sentencesLength,
   currentSentenceIndex,
   setCurrentSentenceIndex,
+  scrollToCurrentSentence,
 }: UseKeyboardNavigationProps) => {
   
   useEffect(() => {
@@ -35,7 +37,14 @@ export const useKeyboardNavigation = ({
         case 'd':
           e.preventDefault();
           if (currentSentenceIndex < sentencesLength - 1) {
-            setCurrentSentenceIndex(prev => prev + 1);
+            setCurrentSentenceIndex(prev => {
+              const newIndex = prev + 1;
+              // Прокручиваем после обновления
+              setTimeout(() => {
+                scrollToCurrentSentence?.();
+              }, 10);
+              return newIndex;
+            });
           }
           break;
           
@@ -43,11 +52,47 @@ export const useKeyboardNavigation = ({
         case 'a':
           e.preventDefault();
           if (currentSentenceIndex > 0) {
-            setCurrentSentenceIndex(prev => prev - 1);
+            setCurrentSentenceIndex(prev => {
+              const newIndex = prev - 1;
+              setTimeout(() => {
+                scrollToCurrentSentence?.();
+              }, 10);
+              return newIndex;
+            });
           }
           break;
           
-        // Убрали arrowup, arrowdown, home, end
+        case 'home':
+          e.preventDefault();
+          setCurrentSentenceIndex(0);
+          setTimeout(() => {
+            scrollToCurrentSentence?.();
+          }, 10);
+          break;
+          
+        case 'end':
+          e.preventDefault();
+          setCurrentSentenceIndex(sentencesLength - 1);
+          setTimeout(() => {
+            scrollToCurrentSentence?.();
+          }, 10);
+          break;
+          
+        case 'j':
+          e.preventDefault();
+          setCurrentSentenceIndex(prev => Math.min(prev + 10, sentencesLength - 1));
+          setTimeout(() => {
+            scrollToCurrentSentence?.();
+          }, 10);
+          break;
+          
+        case 'k':
+          e.preventDefault();
+          setCurrentSentenceIndex(prev => Math.max(prev - 10, 0));
+          setTimeout(() => {
+            scrollToCurrentSentence?.();
+          }, 10);
+          break;
       }
     };
 
@@ -56,5 +101,5 @@ export const useKeyboardNavigation = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [activeTab, isTextLoaded, sentencesLength, currentSentenceIndex, setCurrentSentenceIndex]);
+  }, [activeTab, isTextLoaded, sentencesLength, currentSentenceIndex, setCurrentSentenceIndex, scrollToCurrentSentence]);
 };

@@ -48,3 +48,14 @@ def update_session_position(db: Session, session_id: int, position: int):
 
 def get_session(db: Session, session_id: int):
     return db.query(models.Session).filter(models.Session.id == session_id).first()
+
+
+def create_highlight(db: Session, session_id: int, sentence_index: int, text: str):
+    highlight = models.Highlight(session_id=session_id, sentence_index=sentence_index, text=text)
+    db.add(highlight)
+    db.commit()
+    db.refresh(highlight)
+    return highlight
+
+def get_session_highlights(db: Session, session_id: int):
+    return db.query(models.Highlight).filter(models.Highlight.session_id == session_id).all()

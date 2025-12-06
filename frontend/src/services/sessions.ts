@@ -1,3 +1,4 @@
+// services/sessions.ts
 import api from './api';
 
 export interface Session {
@@ -5,6 +6,7 @@ export interface Session {
   name: string;
   book_id: number;
   user_id: number;
+  current_position: number; // Добавляем это поле
 }
 
 export interface CreateSessionData {
@@ -51,7 +53,10 @@ export const sessionsService = {
   },
 
   addHighlight: async (sessionId: number, data: CreateHighlightData): Promise<Highlight> => {
-    const response = await api.post(`/sessions/${sessionId}/highlights`, data);
+    const response = await api.post(`/sessions/${sessionId}/highlights`, {
+      sentence_index: data.sentence_index,
+      text: data.text
+    });
     return response.data;
   },
 
@@ -60,14 +65,36 @@ export const sessionsService = {
     return response.data;
   },
 
-  // Временные методы (нужно добавить на бэкенде)
+  // Добавляем новые методы
+  updateSessionPosition: async (sessionId: number, position: number): Promise<Session> => {
+    const response = await api.put(`/sessions/${sessionId}/position/quick`, {
+      position: position
+    });
+    return response.data;
+  },
+
+  deleteSession: async (sessionId: number): Promise<{message: string, session_id: number}> => {
+    const response = await api.delete(`/sessions/${sessionId}`);
+    return response.data;
+  },
+
   getSessionHighlights: async (sessionId: number): Promise<Highlight[]> => {
-    // TODO: Добавить эндпоинт на бэкенде
-    return [];
+    try {
+      const response = await api.get(`/sessions/${sessionId}/highlights`);
+      return response.data;
+    } catch (error) {
+      console.warn('Highlights endpoint not implemented yet, returning empty array');
+      return [];
+    }
   },
 
   getSessionSummary: async (sessionId: number): Promise<Summary | null> => {
-    // TODO: Добавить эндпоинт на бэкенде
-    return null;
+    try {
+      const response = await api.get(`/sessions/${sessionId}/summary`);
+      return response.data;
+    } catch (error) {
+      console.warn('Summary endpoint not implemented yet, returning null');
+      return null;
+    }
   },
 };

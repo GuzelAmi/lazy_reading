@@ -17,56 +17,53 @@ body {
 
 /* Кастомные стили для скроллбара */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 3px;
+  background: transparent;
+  border-radius: 2px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 3px;
+  background: #cbd5e1;
+  border-radius: 2px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: #94a3b8;
 }
 
-/* Анимации */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes zoomIn {
+/* Анимация появления кнопки удаления */
+@keyframes fadeInRight {
   from { 
-    transform: scale(0.95); 
-    opacity: 0; 
+    opacity: 0;
+    transform: translateX(10px);
   }
   to { 
-    transform: scale(1); 
-    opacity: 1; 
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
-.animate-in {
-  animation: fadeIn 0.7s ease-out;
+.group:hover button {
+  animation: fadeInRight 0.2s ease-out;
 }
 
-.fade-in {
-  animation: fadeIn 0.7s ease-out;
+/* Градиенты */
+.gradient-primary {
+  background: linear-gradient(135deg, #274E7D 0%, #1f3d61 100%);
 }
 
-.zoom-in {
-  animation: zoomIn 0.7s ease-out;
+.gradient-progress {
+  background: linear-gradient(90deg, #274E7D 0%, #3a6ba5 100%);
 }
 
-/* Утилиты для ограничения строк */
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+/* Тени */
+.shadow-soft {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.shadow-hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }

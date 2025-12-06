@@ -40,3 +40,11 @@ class Summary(Base):
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("sessions.id"))
     content = Column(String)
+
+class Highlight(Base):
+    __tablename__ = "highlights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    sentence_index = Column(Integer)
+    text = Column(String)

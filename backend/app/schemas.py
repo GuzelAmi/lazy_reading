@@ -71,3 +71,17 @@ class BookWithSessionOut(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class HighlightOut(BaseModel):
+    id: int
+    session_id: int
+    sentence_index: int
+    text: str
+
+    class Config:
+        from_attributes = True
+
+class HighlightCreate(BaseModel):
+        sentence_index: int
+        text: str

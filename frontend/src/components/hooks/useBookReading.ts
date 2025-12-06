@@ -11,12 +11,15 @@ interface UseBookReadingReturn {
   visitedSentences: Set<number>;
   loading: boolean;
   isTextLoaded: boolean;
+  textContainerRef: React.RefObject<HTMLDivElement>;
+  currentSentenceRef: React.RefObject<HTMLSpanElement>;
   
   // Функции
   setCurrentSentenceIndex: (index: number) => void;
   loadBookData: () => Promise<void>;
   cleanText: (text: string) => string;
   splitIntoSentences: (text: string) => string[];
+  scrollToCurrentSentence: () => void;
 }
 
 export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BOOK' | 'SUMMARY'): UseBookReadingReturn => {
@@ -30,6 +33,7 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
   const currentSentenceRef = useRef<HTMLSpanElement>(null);
   const textContainerRef = useRef<HTMLDivElement>(null);
   const isSavingRef = useRef<boolean>(false);
+  const hasRestoredPositionRef = useRef<boolean>(false);
 
   // Сохраняем позицию в БД с дебаунсом
   const savePositionToDB = useCallback(async (sessionId: number, position: number) => {
@@ -43,6 +47,54 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
     } finally {
       isSavingRef.current = false;
     }
+  }, []);
+
+  // Плавная прокрутка к текущему предложению
+  const scrollToCurrentSentence = useCallback(() => {
+    if (!currentSentenceRef.current || !textContainerRef.current) return;
+    
+    const sentenceElement = currentSentenceRef.current;
+    const container = textContainerRef.current;
+    
+    // Отменяем предыдущую анимацию
+    if ((window as any).scrollAnimation) {
+      cancelAnimationFrame((window as any).scrollAnimation);
+    }
+    
+    const startTime = Date.now();
+    const duration = 500; // Плавная анимация 500ms
+    const startScrollTop = container.scrollTop;
+    const sentenceTop = sentenceElement.offsetTop;
+    const containerHeight = container.clientHeight;
+    const sentenceHeight = sentenceElement.offsetHeight;
+    
+    // Целевая позиция - предложение в центре контейнера
+    const targetScrollTop = sentenceTop - (containerHeight / 2) + (sentenceHeight / 2);
+    
+    const animateScroll = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Кубическая функция для плавного ускорения и замедления
+      const easeInOutCubic = (t: number) => {
+        return t < 0.5 
+          ? 4 * t * t * t 
+          : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      };
+      
+      const easedProgress = easeInOutCubic(progress);
+      const currentScrollTop = startScrollTop + (targetScrollTop - startScrollTop) * easedProgress;
+      
+      container.scrollTop = currentScrollTop;
+      
+      if (progress < 1) {
+        (window as any).scrollAnimation = requestAnimationFrame(animateScroll);
+      } else {
+        (window as any).scrollAnimation = null;
+      }
+    };
+    
+    (window as any).scrollAnimation = requestAnimationFrame(animateScroll);
   }, []);
 
   // Очистка текста от HTML и рекламы
@@ -88,49 +140,73 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
 
   // Загрузка данных книги
   const loadBookData = useCallback(async () => {
-  if (!activeSession) return;
+    if (!activeSession) return;
 
-  try {
-    setLoading(true);
-    
-    // Загружаем информацию о сессии (чтобы получить сохраненную позицию)
-    const sessionInfo = await sessionsService.getSession(activeSession.session_id);
-    
-    const rawText = await booksService.getBookText(activeSession.book_id);
-    const cleanedText = cleanText(rawText);
-    setBookText(cleanedText);
-    
-    const sentenceArray = splitIntoSentences(cleanedText);
-    setSentences(sentenceArray);
-    setIsTextLoaded(true);
-    
-    // Восстанавливаем сохраненную позицию из БД
-    // Если позиция не сохранена (0) или невалидна, ставим первое предложение
-    if (sessionInfo.current_position !== undefined && 
-        sessionInfo.current_position > 0 && 
-        sessionInfo.current_position < sentenceArray.length) {
-      setCurrentSentenceIndex(sessionInfo.current_position);
-    } else {
-      // Первый вход - начинаем с первого предложения
-      setCurrentSentenceIndex(0);
-      // Сохраняем стартовую позицию
-      if (activeSession) {
-        savePositionToDB(activeSession.session_id, 0);
+    try {
+      setLoading(true);
+      hasRestoredPositionRef.current = false;
+      
+      // Загружаем информацию о сессии (чтобы получить сохраненную позицию)
+      const sessionInfo = await sessionsService.getSession(activeSession.session_id);
+      
+      const rawText = await booksService.getBookText(activeSession.book_id);
+      const cleanedText = cleanText(rawText);
+      setBookText(cleanedText);
+      
+      const sentenceArray = splitIntoSentences(cleanedText);
+      setSentences(sentenceArray);
+      setIsTextLoaded(true);
+      
+      // Восстанавливаем сохраненную позицию из БД
+      const savedPosition = sessionInfo.current_position || 0;
+      
+      // Проверяем валидность позиции
+      let initialPosition = 0;
+      if (savedPosition > 0 && savedPosition < sentenceArray.length) {
+        initialPosition = savedPosition;
+        console.log(`Восстановлена позиция: ${initialPosition}/${sentenceArray.length}`);
+      } else if (savedPosition >= sentenceArray.length) {
+        // Если позиция больше количества предложений, ставим на последнее
+        initialPosition = Math.max(0, sentenceArray.length - 1);
+        console.log(`Позиция скорректирована: ${initialPosition}`);
       }
+      
+      setCurrentSentenceIndex(initialPosition);
+      hasRestoredPositionRef.current = true;
+      
+      // Загружаем существующие выделения
+      try {
+        const existingHighlights = await sessionsService.getSessionHighlights(activeSession.session_id);
+        const visitedSet = new Set(existingHighlights.map(h => h.sentence_index));
+        setVisitedSentences(visitedSet);
+      } catch (error) {
+        console.warn('Не удалось загрузить выделения:', error);
+        setVisitedSentences(new Set());
+      }
+      
+    } catch (error) {
+      console.error('Ошибка загрузки данных книги:', error);
+      setBookText('Ошибка загрузки текста книги.');
+    } finally {
+      setLoading(false);
     }
-    
-    // Загружаем существующие выделения
-    const existingHighlights = await sessionsService.getSessionHighlights(activeSession.session_id);
-    const visitedSet = new Set(existingHighlights.map(h => h.sentence_index));
-    setVisitedSentences(visitedSet);
-    
-  } catch (error) {
-    console.error('Error loading book data:', error);
-    setBookText('Ошибка загрузки текста книги.');
-  } finally {
-    setLoading(false);
-  }
-}, [activeSession, cleanText, splitIntoSentences, savePositionToDB]);
+  }, [activeSession, cleanText, splitIntoSentences]);
+
+  // Прокрутка к восстановленной позиции после загрузки
+  useEffect(() => {
+    if (isTextLoaded && hasRestoredPositionRef.current && currentSentenceIndex >= 0 && sentences.length > 0) {
+      // Ждем немного чтобы DOM успел отрендериться
+      const timer = setTimeout(() => {
+        if (currentSentenceRef.current && textContainerRef.current) {
+          console.log(`Прокрутка к предложению ${currentSentenceIndex}`);
+          scrollToCurrentSentence();
+        }
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isTextLoaded, currentSentenceIndex, sentences.length, scrollToCurrentSentence]);
+
   // Сохранение посещенного предложения
   useEffect(() => {
     const saveVisitedSentence = async () => {
@@ -145,7 +221,7 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
         
         setVisitedSentences(prev => new Set(prev).add(currentSentenceIndex));
       } catch (error) {
-        console.error('Error saving highlight:', error);
+        console.error('Ошибка сохранения выделения:', error);
       }
     };
 
@@ -154,8 +230,8 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
 
   // Сохранение позиции в БД при изменении
   useEffect(() => {
-    if (activeSession && isTextLoaded) {
-      // Сохраняем с небольшой задержкой (дебаунс)
+    if (activeSession && isTextLoaded && currentSentenceIndex >= 0) {
+      // Сохраняем с дебаунсом 500ms
       const timer = setTimeout(() => {
         savePositionToDB(activeSession.session_id, currentSentenceIndex);
       }, 500);
@@ -163,24 +239,6 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
       return () => clearTimeout(timer);
     }
   }, [currentSentenceIndex, activeSession, isTextLoaded, savePositionToDB]);
-
-  // Прокрутка к текущему предложению
-  useEffect(() => {
-    if (currentSentenceRef.current && textContainerRef.current) {
-      const sentenceElement = currentSentenceRef.current;
-      const container = textContainerRef.current;
-      
-      const sentenceRect = sentenceElement.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      
-      if (sentenceRect.top < containerRect.top || sentenceRect.bottom > containerRect.bottom) {
-        sentenceElement.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'center' 
-        });
-      }
-    }
-  }, [currentSentenceIndex]);
 
   // Загрузка при изменении активной сессии
   useEffect(() => {
@@ -200,9 +258,12 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
     visitedSentences,
     loading,
     isTextLoaded,
+    textContainerRef,
+    currentSentenceRef,
     setCurrentSentenceIndex: setCurrentSentenceIndexWithSave,
     loadBookData,
     cleanText,
     splitIntoSentences,
+    scrollToCurrentSentence,
   };
 };

@@ -43,47 +43,57 @@ const App = () => {
 
   // Загрузка данных пользователя
   const loadUserData = async () => {
-    try {
-      setLoading(true);
-      
-      // Загружаем книги
-      const userBooks = await booksService.getBooks();
-      setBooks(userBooks);
-      
-      // Загружаем сессии
-      const userSessions = await sessionsService.getSessions();
-      
-      // Создаем SessionItem для отображения в сайдбаре
-      const sessionItems: SessionItem[] = await Promise.all(
-        userSessions.map(async (session) => {
-          const book = userBooks.find(b => b.id === session.book_id);
-          
-          // Загружаем выделения для расчета прогресса
-          const highlights = await sessionsService.getSessionHighlights(session.id);
-          const sessionHighlights = highlights || [];
-          
-          // Рассчитываем прогресс на основе выделенных предложений
-          // Для расчета нужен общий текст книги, пока используем приблизительный расчет
-          const progress = Math.min(sessionHighlights.length * 10, 100); // Временная формула
-          
-          return {
-            id: session.id,
-            title: book?.title || session.name,
-            author: book?.author || 'Автор неизвестен',
-            progress: progress,
-            book_id: session.book_id,
-            session_id: session.id,
-          };
-        })
-      );
-      
-      setSessions(sessionItems);
-    } catch (error) {
-      console.error('Error loading user data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    setLoading(true);
+    
+    // Загружаем книги
+    const userBooks = await booksService.getBooks();
+    setBooks(userBooks);
+    
+    // Загружаем сессии
+    const userSessions = await sessionsService.getSessions();
+    
+    // Создаем SessionItem для отображения в сайдбаре
+    const sessionItems: SessionItem[] = await Promise.all(
+      userSessions.map(async (session) => {
+        const book = userBooks.find(b => b.id === session.book_id);
+        
+        // Пытаемся загрузить текст книги для точного расчета прогресса
+        let progress = 0;
+        try {
+          if (session.current_position > 0) {
+            const bookText = await booksService.getBookText(session.book_id);
+            const sentences = bookText.split(/[.!?]+/).filter(s => s.trim().length > 0);
+            
+            if (sentences.length > 0) {
+              progress = Math.min(Math.round((session.current_position / sentences.length) * 100), 100);
+            } else {
+              progress = session.current_position > 0 ? 1 : 0;
+            }
+          }
+        } catch (error) {
+          // Если не удалось загрузить текст, используем текущую позицию как прогресс
+          progress = Math.min(session.current_position, 100);
+        }
+        
+        return {
+          id: session.id,
+          title: book?.title || session.name,
+          author: book?.author || 'Автор неизвестен',
+          progress: progress,
+          book_id: session.book_id,
+          session_id: session.id,
+        };
+      })
+    );
+    
+    setSessions(sessionItems);
+  } catch (error) {
+    console.error('Error loading user data:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
 
 
@@ -137,7 +147,26 @@ const App = () => {
     setActiveTab('BOOK');
     setIsRightSidebarOpen(true);
   };
-
+  const handleDeleteSession = async (sessionId: number) => {
+      try {
+        await sessionsService.deleteSession(sessionId);
+        
+        // Удаляем сессию из состояния
+        setSessions(prev => prev.filter(s => s.session_id !== sessionId));
+        
+        // Если удаляем активную сессию, сбрасываем состояние
+        if (activeSession && activeSession.session_id === sessionId) {
+          setActiveSession(null);
+          setCurrentView('HOME');
+        }
+        
+        // Показываем уведомление
+        alert('Сессия успешно удалена!');
+        
+      } catch (error: any) {
+        alert(error.response?.data?.detail || 'Ошибка при удалении сессии');
+      }
+    };
   const handleHomeClick = () => {
     setCurrentView('HOME');
     setActiveSession(null);
@@ -274,6 +303,7 @@ const App = () => {
           handleSelectSession={handleSelectSession}
           sessions={sessions}
           onUploadClick={handleUploadClick}
+          onDeleteSession={handleDeleteSession} // Добавляем
         />
 
         {/* --- Main Center View --- */}

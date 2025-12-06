@@ -7,7 +7,7 @@ from app import auth, crud, models, schemas
 from app.database import get_db, engine
 from fastapi.responses import PlainTextResponse
 import chardet
-
+from fastapi.middleware.cors import CORSMiddleware
 # Импортируем Alembic
 from alembic.config import Config
 from alembic import command
@@ -39,14 +39,30 @@ app = FastAPI(
     version="1.0.0",
     description="API для чтения и конспектирования книг"
 )
-# НАСТРОЙКА CORS - РАЗРЕШАЕМ ВСЕ ДОМЕНЫ ДЛЯ РАЗРАБОТКИ
+
+# УСИЛЕННЫЕ НАСТРОЙКИ CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",  # Vite по умолчанию
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Access-Control-Allow-Origin",
+        "Access-Control-Allow-Headers",
+        "Access-Control-Allow-Methods"
+    ],
     expose_headers=["*"],
+    max_age=3600,
 )
 
 # ... остальной код без изменений (такой же как был)
@@ -280,11 +296,13 @@ def get_session_info(
 @app.put("/sessions/{session_id}/position/quick")
 def quick_update_session_position(
     session_id: int,
-    position: int,
+    position_data: dict,  # Принимаем dict вместо position
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Быстрое обновление позиции (без валидации книги)"""
+    """Быстрое обновление позиции"""
+    position = position_data.get("position", 0)
+    
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -293,6 +311,108 @@ def quick_update_session_position(
     db.commit()
     return {"success": True, "position": session.current_position}
 
+
+
+@app.get("/sessions/{session_id}/highlights")
+def get_session_highlights(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Получить все выделения для сессии"""
+    # Проверяем доступ
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Получаем выделения
+    highlights = db.query(models.Highlight).filter(models.Highlight.session_id == session_id).all()
+    
+    # Форматируем ответ
+    return [
+        {
+            "id": h.id,
+            "session_id": h.session_id,
+            "sentence_index": h.sentence_index,
+            "text": h.text
+        }
+        for h in highlights
+    ]
+
+@app.get("/sessions/{session_id}/summary", response_model=schemas.SummaryOut)
+def get_session_summary(
+    session_id: int, 
+    current_user: models.User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    summary = db.query(models.Summary).filter(models.Summary.session_id == session_id).first()
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    
+    return summary
+
+
+
+@app.post("/sessions/{session_id}/highlights", response_model=dict)
+def add_highlight(
+    session_id: int,
+    highlight: dict,  # Используем dict вместо схемы для гибкости
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Создаем выделение
+    db_highlight = crud.create_highlight(
+        db, 
+        session_id, 
+        highlight.get("sentence_index", 0), 
+        highlight.get("text", "")
+    )
+    return {"highlight_id": db_highlight.id}
+
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Обработчик OPTIONS запросов для CORS"""
+    return {
+        "status": "ok",
+        "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allowed_headers": ["Authorization", "Content-Type"]
+    }
+
+
+@app.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Удаление сессии"""
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Удаляем связанные записи (highlights и summary) через каскад
+    # Если нет каскада, удаляем вручную:
+    db.query(models.Highlight).filter(models.Highlight.session_id == session_id).delete()
+    db.query(models.Summary).filter(models.Summary.session_id == session_id).delete()
+    
+    # Удаляем саму сессию
+    db.delete(session)
+    db.commit()
+    
+    return {"message": "Session deleted successfully", "session_id": session_id}
 
 if __name__ == "__main__":
     import uvicorn
