@@ -7,7 +7,6 @@ export interface Book {
   title: string;
   author: string | null;
   owner_id: number;
-  session_id?: number;
 }
 
 export interface Session {
@@ -15,7 +14,7 @@ export interface Session {
   name: string;
   book_id: number;
   user_id: number;
-  book?: Book;
+  current_position: number;
 }
 
 export interface Highlight {
@@ -39,6 +38,8 @@ export interface SessionItem {
   progress: number;
   book_id: number;
   session_id: number;
+  current_position: number;
+  total_sentences: number;
 }
 
 export const theme = {

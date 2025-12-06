@@ -1,37 +1,15 @@
 # main.py
 from fastapi import FastAPI, Depends, HTTPException, status, Form, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from app import auth, crud, models, schemas
 from app.database import get_db, engine
 from fastapi.responses import PlainTextResponse
-import chardet
 from fastapi.middleware.cors import CORSMiddleware
-# Импортируем Alembic
-from alembic.config import Config
-from alembic import command
-
-# Автоматическое применение миграций при старте
-def run_migrations():
-    try:
-        print("🔄 Проверка и применение миграций базы данных...")
-        
-        # Конфигурация Alembic
-        alembic_cfg = Config("alembic.ini")
-        
-        # Применяем все миграции
-        command.upgrade(alembic_cfg, "head")
-        
-        print("✅ Миграции успешно применены")
-    except Exception as e:
-        print(f"⚠️  Ошибка при применении миграций: {e}")
-        print("⚠️  Продолжаем работу без миграций...")
-
-# Запускаем миграции при старте
-run_migrations()
-
-# Создаем таблицы если их нет (для совместимости)
+import chardet
+import re 
+from app.schemas import HighlightCreate
+# Создаем таблицы если их нет
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -40,51 +18,47 @@ app = FastAPI(
     description="API для чтения и конспектирования книг"
 )
 
-# УСИЛЕННЫЕ НАСТРОЙКИ CORS
+# РАБОЧИЙ CORS - ДОБАВЛЯЕМ САМЫМ ПЕРВЫМ
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+# Middleware для ручной установки CORS заголовков
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:5173",  # Vite по умолчанию
-        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Accept",
-        "Origin",
-        "X-Requested-With",
-        "Access-Control-Allow-Origin",
-        "Access-Control-Allow-Headers",
-        "Access-Control-Allow-Methods"
-    ],
+    allow_headers=["*"],
     expose_headers=["*"],
     max_age=3600,
 )
 
-# ... остальной код без изменений (такой же как был)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+@app.options("/{path:path}")
+async def options_route(path: str):
+    return {}
+
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to Book Reader API", "docs": "/docs"}
 
 # ---------------------------
-# Вспомогательная функция аутентификации
-# ---------------------------
-def authenticate_user(db: Session, username: str, password: str):
-    user = crud.get_user_by_username(db, username)
-    if not user:
-        return None
-    if not auth.verify_password(password, user.hashed_password):
-        return None
-    return user
-
-# ---------------------------
-# Регистрация
+# Регистрация и вход
 # ---------------------------
 @app.post("/auth/register", response_model=schemas.UserOut)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    # Проверяем, существует ли пользователь
     db_user = crud.get_user_by_username(db, username=user.username)
     if db_user:
         raise HTTPException(
@@ -93,23 +67,19 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
         )
     return crud.create_user(db, user.username, user.password)
 
-# ---------------------------
-# Вход (login)
-# ---------------------------
 @app.post("/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
+    user = crud.get_user_by_username(db, form_data.username)
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Incorrect username or password"
         )
     access_token = auth.create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer", "user_id": user.id}
 
 # ---------------------------
-# Защищённый маршрут (токен)
+# Получение текущего пользователя
 # ---------------------------
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     payload = auth.decode_token(token)
@@ -121,26 +91,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
 
-@app.get("/protected")
-def protected_route(current_user: models.User = Depends(get_current_user)):
-    return {"message": f"Hello, {current_user.username}! This is a protected route."}
-
 # ---------------------------
-# Получение списка книг пользователя
+# Книги
 # ---------------------------
 @app.get("/books/", response_model=list[schemas.BookOut])
-def get_user_books(
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Здесь нужно добавить метод в crud.py для получения книг пользователя
-    # Временно используем прямое обращение к БД
+def get_user_books(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     books = db.query(models.Book).filter(models.Book.owner_id == current_user.id).all()
     return books
 
-# ---------------------------
-# Загрузка книги
-# ---------------------------
 @app.post("/books/upload", response_model=schemas.BookOut)
 def upload_book_file(
     book_file: UploadFile = File(...),
@@ -149,101 +107,16 @@ def upload_book_file(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Читаем содержимое файла
+    # Читаем файл
     content = book_file.file.read()
     
     # Создаем книгу
     book = crud.create_book(db, title=title, author=author, content=content, owner_id=current_user.id)
     
-    # Автоматически создаем сессию для этой книги
-    session_name = f"Чтение: {title[:30]}{'...' if len(title) > 30 else ''}"
-    session = crud.create_session(db, name=session_name, book_id=book.id, user_id=current_user.id)
-    
-    # Создаем первоначальный конспект
-    summary_text = f"Книга '{title}'" + (f" от автора {author}" if author else "")
-    summary = crud.create_summary(db, session_id=session.id, content=summary_text)
-    
     return book
-# ---------------------------
-# Сессии
-# ---------------------------
-@app.post("/sessions/", response_model=dict)
-def create_session(
-    session: schemas.SessionCreate, 
-    db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
-):
-    # Проверяем, принадлежит ли книга пользователю
-    book = crud.get_book(db, session.book_id)
-    if not book or book.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Book not found or access denied"
-        )
-    
-    db_session = crud.create_session(db, session.name, session.book_id, current_user.id)
-    return {"session_id": db_session.id, "name": db_session.name}
 
-@app.get("/sessions/", response_model=list[dict])
-def get_user_sessions(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    sessions = db.query(models.Session).filter(models.Session.user_id == current_user.id).all()
-    return [{"id": s.id, "name": s.name, "book_id": s.book_id} for s in sessions]
-
-
-
-@app.post("/sessions/{session_id}/summarize", response_model=dict)
-def create_summary(
-    session_id: int, 
-    summary: schemas.SummaryCreate, 
-    db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
-):
-    # Проверяем, принадлежит ли сессия пользователю
-    session = db.query(models.Session).filter(models.Session.id == session_id).first()
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Session not found or access denied"
-        )
-    
-    db_summary = crud.create_summary(db, session_id, summary.content)
-    return {"summary_id": db_summary.id}
-
-# ---------------------------
-# Получение текста книги
-# ---------------------------
 @app.get("/books/{book_id}/text", response_class=PlainTextResponse)
 def get_book_text(
-    book_id: int, 
-    current_user: models.User = Depends(get_current_user), 
-    db: Session = Depends(get_db)
-):
-    book = crud.get_book(db, book_id)
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-
-    if book.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="You do not have access to this book")
-
-    # Определяем кодировку
-    result = chardet.detect(book.content)
-    encoding = result['encoding'] if result['confidence'] > 0.7 else 'utf-8'
-
-    try:
-        text = book.content.decode(encoding)
-    except Exception:
-        text = book.content.decode('utf-8', errors='replace')
-
-    return PlainTextResponse(text)
-
-# ---------------------------
-# Получение информации о книге
-# ---------------------------
-@app.get("/books/{book_id}", response_model=schemas.BookOut)
-def get_book_info(
     book_id: int,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -251,24 +124,145 @@ def get_book_info(
     book = crud.get_book(db, book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    
     if book.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="You do not have access to this book")
+        raise HTTPException(status_code=403, detail="Access denied")
     
-    return book
+    # Декодируем текст
+    result = chardet.detect(book.content)
+    encoding = result['encoding'] if result['confidence'] > 0.7 else 'utf-8'
+    try:
+        text = book.content.decode(encoding)
+    except:
+        text = book.content.decode('utf-8', errors='replace')
+    
+    return PlainTextResponse(text)
 
 # ---------------------------
-# Корневой маршрут
+# Сессии (УПРОЩЕННЫЕ)
 # ---------------------------
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to Book Reader API"}
+@app.post("/sessions/", response_model=schemas.SessionOut)
+def create_session_endpoint(
+    session: schemas.SessionCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    book = crud.get_book(db, session.book_id)
+    if not book or book.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    db_session = crud.create_session(db, session.name, session.book_id, current_user.id)
+    return db_session
+
+@app.get("/sessions/", response_model=list[dict])
+def get_user_sessions(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    sessions = db.query(models.Session).filter(models.Session.user_id == current_user.id).all()
+    
+    # Преобразуем в словари
+    result = []
+    for session in sessions:
+        # Находим книгу для названия
+        book = db.query(models.Book).filter(models.Book.id == session.book_id).first()
+        
+        result.append({
+            "id": session.id,
+            "name": session.name,
+            "book_id": session.book_id,
+            "user_id": session.user_id,
+            "current_position": session.current_position if hasattr(session, 'current_position') else 0,
+            "total_sentences": 100,  # Временное значение
+            "book_title": book.title if book else "Неизвестная книга",
+            "book_author": book.author if book else None
+        })
+    
+    return result
+
+@app.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Удаляем связанные записи
+    db.query(models.Highlight).filter(models.Highlight.session_id == session_id).delete()
+    db.query(models.Summary).filter(models.Summary.session_id == session_id).delete()
+    
+    db.delete(session)
+    db.commit()
+    
+    return {"message": "Session deleted successfully"}
+
+@app.get("/sessions/{session_id}")
+def get_session_with_progress(
+    session_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Получаем информацию о книге для расчета total_sentences
+    book = crud.get_book(db, session.book_id)
+    total_sentences = 0
+    
+    if book:
+        try:
+            # Определяем кодировку и получаем текст
+            result = chardet.detect(book.content)
+            encoding = result['encoding'] if result['confidence'] > 0.7 else 'utf-8'
+            
+            try:
+                text = book.content.decode(encoding)
+            except Exception:
+                text = book.content.decode('utf-8', errors='replace')
+            
+            # Очищаем текст от HTML тегов
+            text = re.sub(r'<[^>]*>', '', text)
+            
+            # Убираем рекламу - исправляем JavaScript синтаксис на Python
+            patterns = [
+                r'Спасибо, что скачали книгу в бесплатной электронной библиотеке Royallib\.ru.*',
+                r'Все книги автора:.*',
+                r'Эта же книга в других форматах:.*',
+                r'Приятного чтения!.*',
+                r'http://royallib\.ru.*',
+                r'Приправа: \d+%.*',
+                r'Предложение \d+ из \d+',
+            ]
+            
+            for pattern in patterns:
+                text = re.sub(pattern, '', text)
+            
+            # Разбиваем на предложения
+            sentences = re.split(r'[.!?]+', text)
+            
+            # Фильтруем пустые и очень короткие предложения
+            filtered_sentences = [s.strip() for s in sentences if len(s.strip()) > 3]
+            total_sentences = len(filtered_sentences)
+            
+        except Exception as e:
+            print(f"Error calculating sentences for book {book.id}: {e}")
+            total_sentences = 0
+    
+    return {
+        "id": session.id,
+        "name": session.name,
+        "book_id": session.book_id,
+        "user_id": session.user_id,
+        "current_position": session.current_position,
+        "total_sentences": total_sentences
+    }
 
 
-
-# main.py
 @app.put("/sessions/{session_id}/position")
-def update_session_position(
+def update_session_position_endpoint(
     session_id: int,
     position: int,
     current_user: models.User = Depends(get_current_user),
@@ -278,71 +272,79 @@ def update_session_position(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    updated = crud.update_session_position(db, session_id, position)
-    return {"success": True, "position": updated.current_position}
-
-@app.get("/sessions/{session_id}")
-def get_session_info(
-    session_id: int,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    session = crud.get_session(db, session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session
-
-# main.py - добавить после существующих эндпоинтов
-@app.put("/sessions/{session_id}/position/quick")
-def quick_update_session_position(
-    session_id: int,
-    position_data: dict,  # Принимаем dict вместо position
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Быстрое обновление позиции"""
-    position = position_data.get("position", 0)
+    session.current_position = position
+    db.commit()
+    db.refresh(session)
     
+    return {"success": True, "position": session.current_position}
+# ---------------------------
+# Выделения
+# ---------------------------
+@app.post("/sessions/{session_id}/highlights")
+def add_highlight(
+    session_id: int,
+    highlight: HighlightCreate,  # Изменяем на Pydantic модель
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    session.current_position = position
+    # Создаем выделение
+    db_highlight = models.Highlight(
+        session_id=session_id, 
+        sentence_index=highlight.sentence_index, 
+        text=highlight.text
+    )
+    db.add(db_highlight)
     db.commit()
-    return {"success": True, "position": session.current_position}
-
-
+    db.refresh(db_highlight)
+    
+    return {"highlight_id": db_highlight.id}
 
 @app.get("/sessions/{session_id}/highlights")
 def get_session_highlights(
     session_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Получить все выделения для сессии"""
-    # Проверяем доступ
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Получаем выделения
     highlights = db.query(models.Highlight).filter(models.Highlight.session_id == session_id).all()
-    
-    # Форматируем ответ
-    return [
-        {
-            "id": h.id,
-            "session_id": h.session_id,
-            "sentence_index": h.sentence_index,
-            "text": h.text
-        }
-        for h in highlights
-    ]
+    return highlights
 
-@app.get("/sessions/{session_id}/summary", response_model=schemas.SummaryOut)
-def get_session_summary(
-    session_id: int, 
-    current_user: models.User = Depends(get_current_user), 
+# ---------------------------
+# Конспекты
+# ---------------------------
+@app.post("/sessions/{session_id}/summarize")
+def create_summary(
+    session_id: int,
+    summary_data: dict,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Создаем конспект
+    summary = models.Summary(
+        session_id=session_id,
+        content=summary_data.get("content", "")
+    )
+    db.add(summary)
+    db.commit()
+    db.refresh(summary)
+    
+    return {"id": summary.id, "message": "Summary created"}
+
+@app.get("/sessions/{session_id}/summary")
+def get_session_summary_endpoint(
+    session_id: int,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
@@ -354,67 +356,28 @@ def get_session_summary(
         raise HTTPException(status_code=404, detail="Summary not found")
     
     return summary
-
-
-
-@app.post("/sessions/{session_id}/highlights", response_model=dict)
-def add_highlight(
+# main.py - добавьте этот эндпоинт
+@app.put("/sessions/{session_id}/progress")
+def update_session_progress(
     session_id: int,
-    highlight: dict,  # Используем dict вместо схемы для гибкости
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_position: int,
+    total_sentences: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Создаем выделение
-    db_highlight = crud.create_highlight(
-        db, 
-        session_id, 
-        highlight.get("sentence_index", 0), 
-        highlight.get("text", "")
-    )
-    return {"highlight_id": db_highlight.id}
-
-
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """Обработчик OPTIONS запросов для CORS"""
-    return {
-        "status": "ok",
-        "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allowed_headers": ["Authorization", "Content-Type"]
-    }
-
-
-@app.delete("/sessions/{session_id}")
-def delete_session(
-    session_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    """Удаление сессии"""
-    session = db.query(models.Session).filter(models.Session.id == session_id).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if session.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Удаляем связанные записи (highlights и summary) через каскад
-    # Если нет каскада, удаляем вручную:
-    db.query(models.Highlight).filter(models.Highlight.session_id == session_id).delete()
-    db.query(models.Summary).filter(models.Summary.session_id == session_id).delete()
-    
-    # Удаляем саму сессию
-    db.delete(session)
+    session.current_position = current_position
+    # Если нужно сохранять total_sentences в сессии, добавьте поле в модель
+    # session.total_sentences = total_sentences
     db.commit()
+    db.refresh(session)
     
-    return {"message": "Session deleted successfully", "session_id": session_id}
+    return {"success": True, "current_position": session.current_position}
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

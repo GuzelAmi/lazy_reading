@@ -11,7 +11,7 @@ class UserOut(BaseModel):
     username: str
 
     class Config:
-        from_attributes = True  # Заменяем orm_mode = True для Pydantic v2
+        from_attributes = True
 
 class BookOut(BaseModel):
     id: int
@@ -21,16 +21,6 @@ class BookOut(BaseModel):
     class Config:
         from_attributes = True
 
-class BookCreate(BaseModel):
-    title: str
-    author: Optional[str] = None
-
-class SessionCreate(BaseModel):
-    name: str
-    book_id: int
-
-
-# app/schemas.py
 class SessionOut(BaseModel):
     id: int
     name: str
@@ -40,38 +30,18 @@ class SessionOut(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-
-class SummaryCreate(BaseModel):
-    content: str
-
-class SummaryOut(BaseModel):
-    id: int
-    session_id: int
-    content: str
-
-    class Config:
-        from_attributes = True
+class SessionCreate(BaseModel):
+    name: str
+    book_id: int
 
 class Token(BaseModel):
     access_token: str
     token_type: str
     user_id: int
 
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-# app/schemas.py - добавьте
-class BookWithSessionOut(BaseModel):
-    id: int
-    title: str
-    author: Optional[str] = None
-    session_id: Optional[int] = None
-    
-    class Config:
-        from_attributes = True
-
+class HighlightCreate(BaseModel):
+    sentence_index: int
+    text: str
 
 class HighlightOut(BaseModel):
     id: int
@@ -81,7 +51,3 @@ class HighlightOut(BaseModel):
 
     class Config:
         from_attributes = True
-
-class HighlightCreate(BaseModel):
-        sentence_index: int
-        text: str

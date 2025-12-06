@@ -1,3 +1,4 @@
+// App.tsx - исправляем типы и функции
 import React, { useState, useEffect } from 'react';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { Header } from './components/Layout/Header';
@@ -56,25 +57,14 @@ const App = () => {
     // Создаем SessionItem для отображения в сайдбаре
     const sessionItems: SessionItem[] = await Promise.all(
       userSessions.map(async (session) => {
+        // Находим книгу для названия и автора
         const book = userBooks.find(b => b.id === session.book_id);
         
-        // Пытаемся загрузить текст книги для точного расчета прогресса
-        let progress = 0;
-        try {
-          if (session.current_position > 0) {
-            const bookText = await booksService.getBookText(session.book_id);
-            const sentences = bookText.split(/[.!?]+/).filter(s => s.trim().length > 0);
-            
-            if (sentences.length > 0) {
-              progress = Math.min(Math.round((session.current_position / sentences.length) * 100), 100);
-            } else {
-              progress = session.current_position > 0 ? 1 : 0;
-            }
-          }
-        } catch (error) {
-          // Если не удалось загрузить текст, используем текущую позицию как прогресс
-          progress = Math.min(session.current_position, 100);
-        }
+        // Получаем детали сессии (чтобы получить current_position)
+        const sessionDetails = await sessionsService.getSession(session.id);
+        
+        // Временный расчет прогресса
+        const progress = sessionDetails.current_position > 0 ? Math.min(sessionDetails.current_position * 5, 100) : 0;
         
         return {
           id: session.id,
@@ -83,6 +73,8 @@ const App = () => {
           progress: progress,
           book_id: session.book_id,
           session_id: session.id,
+          current_position: sessionDetails.current_position || 0,
+          total_sentences: session.total_sentences || 100, // Временное значение
         };
       })
     );
@@ -95,26 +87,34 @@ const App = () => {
   }
 };
 
-
-
-
-  const handleCreateSummary = async () => {
-    if (!activeSession) return;
+  // Функция для обновления прогресса
+  const handleUpdateProgress = (
+    sessionId: number, 
+    currentPosition: number, 
+    totalSentences: number
+  ) => {
+    setSessions(prev => prev.map(session => 
+      session.id === sessionId 
+        ? { 
+            ...session, 
+            current_position: currentPosition,
+            total_sentences: totalSentences,
+            progress: totalSentences > 0 ? Math.round((currentPosition / totalSentences) * 100) : 0
+          } 
+        : session
+    ));
     
-    try {
-      // Вызываем API для создания конспекта
-      await sessionsService.createSummary(activeSession.session_id, {
-        content: "Генерируется..."
-      });
-      
-      // Обновляем конспект
-      const newSummary = await sessionsService.getSessionSummary(activeSession.session_id);
-      // Обновляем состояние...
-      
-    } catch (error) {
-      console.error('Error creating summary:', error);
+    // Обновляем активную сессию
+    if (activeSession && activeSession.id === sessionId) {
+      setActiveSession(prev => prev ? {
+        ...prev,
+        current_position: currentPosition,
+        total_sentences: totalSentences,
+        progress: totalSentences > 0 ? Math.round((currentPosition / totalSentences) * 100) : 0
+      } : null);
     }
   };
+
   // --- Обработчики ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,26 +147,7 @@ const App = () => {
     setActiveTab('BOOK');
     setIsRightSidebarOpen(true);
   };
-  const handleDeleteSession = async (sessionId: number) => {
-      try {
-        await sessionsService.deleteSession(sessionId);
-        
-        // Удаляем сессию из состояния
-        setSessions(prev => prev.filter(s => s.session_id !== sessionId));
-        
-        // Если удаляем активную сессию, сбрасываем состояние
-        if (activeSession && activeSession.session_id === sessionId) {
-          setActiveSession(null);
-          setCurrentView('HOME');
-        }
-        
-        // Показываем уведомление
-        alert('Сессия успешно удалена!');
-        
-      } catch (error: any) {
-        alert(error.response?.data?.detail || 'Ошибка при удалении сессии');
-      }
-    };
+
   const handleHomeClick = () => {
     setCurrentView('HOME');
     setActiveSession(null);
@@ -188,52 +169,129 @@ const App = () => {
       return;
     }
 
-    // Предлагаем название книги из имени файла
-    const defaultTitle = file.name.replace(/\.[^/.]+$/, ""); // Убираем расширение
-    
-    const userTitle = prompt('Введите название книги:', defaultTitle);
-    if (!userTitle) {
-      e.target.value = '';
-      return;
-    }
-    
-    const userAuthor = prompt('Введите автора книги (необязательно):', '');
-
     try {
       setLoading(true);
       
-      // Загружаем книгу (автоматически создаст сессию)
-      const response = await booksService.uploadBook({
-        title: userTitle,
-        author: userAuthor || undefined,
+      // Извлекаем название книги из имени файла
+      // Убираем расширение .txt и другие расширения
+      let title = file.name
+        .replace(/\.[^/.]+$/, "") // Убираем расширение
+        .replace(/_/g, ' ') // Заменяем подчеркивания на пробелы
+        .replace(/-/g, ' ') // Заменяем дефисы на пробелы
+        .trim();
+      
+      // Если имя файла пустое, используем "Без названия"
+      if (!title) {
+        title = "Без названия";
+      }
+      
+      // Пытаемся извлечь автора из имени файла (если формат "Автор - Название.txt" или подобный)
+      let author = '';
+      const authorPatterns = [
+        /^(.*?)[_\-–—\s]+[–—\s]+(.*)$/, // Автор — Название
+        /^(.*?)\s*-\s*(.*)$/, // Автор - Название
+        /^(.*?)\s*–\s*(.*)$/, // Автор – Название
+      ];
+      
+      for (const pattern of authorPatterns) {
+        const match = title.match(pattern);
+        if (match && match[1] && match[2]) {
+          author = match[1].trim();
+          title = match[2].trim();
+          break;
+        }
+      }
+      
+      // Загружаем книгу
+      const book = await booksService.uploadBook({
+        title: title,
+        author: author || undefined,
         file: file
       });
+      
+      // Создаем сессию для этой книги
+      const session = await sessionsService.createSession(book.id, `Чтение: ${title}`);
       
       // Обновляем данные
       await loadUserData();
       
-      // Находим новую сессию и переходим к ней
-      const newSessionItem = {
-        id: response.session_id,
-        title: userTitle,
-        author: userAuthor || 'Автор неизвестен',
+      // Находим новую сессию
+      const sessionItem: SessionItem = {
+        id: session.id,
+        title: title,
+        author: author || 'Автор неизвестен',
         progress: 0,
-        book_id: response.id,
-        session_id: response.session_id,
+        book_id: book.id,
+        session_id: session.id,
+        current_position: 0,
+        total_sentences: 100, // Временное значение
       };
       
-      setActiveSession(newSessionItem);
+      setActiveSession(sessionItem);
       setCurrentView('SESSION');
       setActiveTab('BOOK');
       setIsRightSidebarOpen(true);
       
-      alert('Книга успешно загружена и сессия создана!');
+      // Уведомляем пользователя
+      const notification = document.createElement('div');
+      notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+      notification.innerHTML = `
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+          </svg>
+          <span>Книга "${title}" успешно загружена!</span>
+        </div>
+      `;
+      document.body.appendChild(notification);
+      
+      // Автоматически скрываем уведомление через 3 секунды
+      setTimeout(() => {
+        notification.remove();
+      }, 3000);
       
     } catch (error: any) {
-      alert(error.response?.data?.detail || 'Ошибка загрузки книги');
+      console.error('Ошибка загрузки книги:', error);
+      
+      // Показываем ошибку
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+      errorDiv.innerHTML = `
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+          </svg>
+          <span>Ошибка: ${error.response?.data?.detail || 'Не удалось загрузить книгу'}</span>
+        </div>
+      `;
+      document.body.appendChild(errorDiv);
+      
+      setTimeout(() => {
+        errorDiv.remove();
+      }, 5000);
     } finally {
       setLoading(false);
       e.target.value = '';
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: number) => {
+    try {
+      await sessionsService.deleteSession(sessionId);
+      
+      // Удаляем сессию из состояния
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      
+      // Если удаляем активную сессию, сбрасываем состояние
+      if (activeSession && activeSession.id === sessionId) {
+        setActiveSession(null);
+        setCurrentView('HOME');
+      }
+      
+      alert('Сессия успешно удалена!');
+      
+    } catch (error: any) {
+      alert(error.response?.data?.detail || 'Ошибка при удалении сессии');
     }
   };
 
@@ -245,6 +303,20 @@ const App = () => {
     setSessions([]);
     setBooks([]);
     setActiveSession(null);
+  };
+
+  const handleCreateSummary = async () => {
+    if (!activeSession) return;
+    
+    try {
+      // Исправляем: передаем строку, а не объект
+      await sessionsService.createSummary(activeSession.id, "Генерируется...");
+      
+      alert('Конспект начал создаваться!');
+      
+    } catch (error) {
+      console.error('Error creating summary:', error);
+    }
   };
 
   // --- Экран авторизации ---
@@ -290,7 +362,7 @@ const App = () => {
         setIsRightSidebarOpen={setIsRightSidebarOpen}
         handleHomeClick={handleHomeClick}
         setIsLoggedIn={handleLogout}
-        currentView={currentView} // Передаем текущий вид
+        currentView={currentView}
       />
 
       {/* --- Content Body --- */}
@@ -303,7 +375,7 @@ const App = () => {
           handleSelectSession={handleSelectSession}
           sessions={sessions}
           onUploadClick={handleUploadClick}
-          onDeleteSession={handleDeleteSession} // Добавляем
+          onDeleteSession={handleDeleteSession}
         />
 
         {/* --- Main Center View --- */}
@@ -329,6 +401,7 @@ const App = () => {
                 setActiveTab={setActiveTab}
                 isRightSidebarOpen={isRightSidebarOpen}
                 setIsRightSidebarOpen={setIsRightSidebarOpen}
+                onUpdateProgress={handleUpdateProgress}
               />
             ) : (
               <div className="flex h-full items-center justify-center">

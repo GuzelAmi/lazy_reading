@@ -9,8 +9,8 @@ interface HeaderProps {
   isRightSidebarOpen: boolean;
   setIsRightSidebarOpen: (b: boolean) => void;
   handleHomeClick: () => void;
-  setIsLoggedIn: (b: boolean) => void;
-  currentView?: 'HOME' | 'SESSION'; // Добавляем текущий вид
+  setIsLoggedIn: (b: boolean) => void; // Ожидает функцию, которая устанавливает isLoggedIn в false
+  currentView?: 'HOME' | 'SESSION';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,8 +20,8 @@ export const Header: React.FC<HeaderProps> = ({
   isRightSidebarOpen,
   setIsRightSidebarOpen,
   handleHomeClick,
-  setIsLoggedIn,
-  currentView = 'HOME', // Значение по умолчанию
+  setIsLoggedIn, // Используем правильное имя
+  currentView = 'HOME',
 }) => (
   <header className={`h-16 bg-white border-b border-[#274E7D]/10 flex items-center justify-between px-4 shadow-sm z-30 relative`}>
     <div className="flex items-center gap-4">
@@ -69,7 +69,7 @@ export const Header: React.FC<HeaderProps> = ({
       
       {/* Кнопка выхода */}
       <button 
-        onClick={() => setIsLoggedIn(false)}
+        onClick={() => setIsLoggedIn(false)} // Вызываем переданную функцию
         className="flex items-center gap-2 text-gray-400 hover:text-[#274E7D] transition-colors group px-3 py-1.5 rounded-md hover:bg-[#274E7D]/5"
       >
         <span className="text-sm font-medium">Выйти</span>

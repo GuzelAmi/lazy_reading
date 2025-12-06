@@ -1,8 +1,8 @@
 // components/Views/SessionView.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BookOpen, FileText, ArrowRight, ArrowLeft } from 'lucide-react';
 import { SessionItem, TabState } from '../../types';
-import { sessionsService } from '../../services';
+import { sessionsService } from '../../services/sessions';
 import { useBookReading } from '../hooks/useBookReading';
 import { useKeyboardNavigation } from '../hooks/useKeyboardNavigation';
 
@@ -12,6 +12,7 @@ interface SessionViewProps {
   setActiveTab: (t: TabState) => void;
   isRightSidebarOpen: boolean;
   setIsRightSidebarOpen: (b: boolean) => void;
+  onUpdateProgress?: (sessionId: number, currentPosition: number, totalSentences: number) => void;
 }
 
 export const SessionView: React.FC<SessionViewProps> = ({
@@ -20,8 +21,10 @@ export const SessionView: React.FC<SessionViewProps> = ({
   setActiveTab,
   isRightSidebarOpen,
   setIsRightSidebarOpen,
+  onUpdateProgress,
 }) => {
   const [summary, setSummary] = useState<string>('');
+  const lastPositionRef = useRef<number>(0);
   
   const {
     sentences,
@@ -32,7 +35,6 @@ export const SessionView: React.FC<SessionViewProps> = ({
     textContainerRef,
     currentSentenceRef,
     setCurrentSentenceIndex,
-    scrollToCurrentSentence,
   } = useBookReading(activeSession, activeTab);
 
   useKeyboardNavigation({
@@ -43,42 +45,23 @@ export const SessionView: React.FC<SessionViewProps> = ({
     setCurrentSentenceIndex,
   });
 
-  // Состояние для отображения восстановленной позиции
-  const [showRestoredPosition, setShowRestoredPosition] = useState(false);
-
+  // Отслеживаем изменения позиции для обновления прогресса
   useEffect(() => {
-    if (isTextLoaded && currentSentenceIndex > 0) {
-      // Показываем уведомление о восстановлении позиции
-      setShowRestoredPosition(true);
-      const timer = setTimeout(() => {
-        setShowRestoredPosition(false);
-      }, 2000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [isTextLoaded, currentSentenceIndex]);
-
-  useEffect(() => {
-    const loadSummary = async () => {
-      if (!activeSession || activeTab !== 'SUMMARY') return;
-      
-      try {
-        const sessionSummary = await sessionsService.getSessionSummary(activeSession.session_id);
-        if (sessionSummary) {
-          setSummary(sessionSummary.content);
-        } else {
-          setSummary('');
-        }
-      } catch (error) {
-        console.error('Error loading summary:', error);
-        setSummary('Ошибка загрузки конспекта.');
+    if (isTextLoaded && sentences.length > 0 && activeSession && onUpdateProgress) {
+      // Обновляем только если позиция изменилась
+      if (lastPositionRef.current !== currentSentenceIndex) {
+        lastPositionRef.current = currentSentenceIndex;
+        
+        // Небольшая задержка для дебаунса
+        const timer = setTimeout(() => {
+          onUpdateProgress(activeSession.id, currentSentenceIndex, sentences.length);
+        }, 300);
+        
+        return () => clearTimeout(timer);
       }
-    };
+    }
+  }, [currentSentenceIndex, isTextLoaded, sentences.length, activeSession, onUpdateProgress]);
 
-    loadSummary();
-  }, [activeSession, activeTab]);
-
-  // Кнопки навигации
   const handleNextSentence = () => {
     if (currentSentenceIndex < sentences.length - 1) {
       setCurrentSentenceIndex(currentSentenceIndex + 1);
@@ -88,6 +71,12 @@ export const SessionView: React.FC<SessionViewProps> = ({
   const handlePrevSentence = () => {
     if (currentSentenceIndex > 0) {
       setCurrentSentenceIndex(currentSentenceIndex - 1);
+    }
+  };
+
+  const handleJumpToSentence = (index: number) => {
+    if (index >= 0 && index < sentences.length) {
+      setCurrentSentenceIndex(index);
     }
   };
 
@@ -123,9 +112,9 @@ export const SessionView: React.FC<SessionViewProps> = ({
                   <span className="font-normal text-gray-500 ml-2">— {activeSession.author}</span>
                 )}
               </h2>
-              {showRestoredPosition && (
-                <p className="text-xs text-green-600 animate-pulse">
-                  ✓ Позиция восстановлена: предложение {currentSentenceIndex + 1} из {sentences.length}
+              {isTextLoaded && sentences.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  Предложение {currentSentenceIndex + 1} из {sentences.length}
                 </p>
               )}
             </div>
@@ -133,13 +122,13 @@ export const SessionView: React.FC<SessionViewProps> = ({
 
           <div className="flex items-center gap-4">
             {/* Навигационные кнопки */}
-            {activeTab === 'BOOK' && isTextLoaded && (
+            {activeTab === 'BOOK' && isTextLoaded && sentences.length > 0 && (
               <div className="flex items-center gap-2 mr-4">
                 <button
                   onClick={handlePrevSentence}
                   disabled={currentSentenceIndex === 0}
                   className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Предыдущее предложение (←)"
+                  title="Предыдущее предложение (← или A)"
                 >
                   <ArrowLeft size={16} />
                 </button>
@@ -150,7 +139,7 @@ export const SessionView: React.FC<SessionViewProps> = ({
                   onClick={handleNextSentence}
                   disabled={currentSentenceIndex === sentences.length - 1}
                   className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Следующее предложение (→)"
+                  title="Следующее предложение (→ или D)"
                 >
                   <ArrowRight size={16} />
                 </button>
@@ -195,23 +184,10 @@ export const SessionView: React.FC<SessionViewProps> = ({
             
             {activeTab === 'BOOK' ? (
               <div className="relative">
-                {/* Индикатор текущей позиции */}
-                {isTextLoaded && (
-                  <div className="mb-6 p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-700">
-                    <div className="flex justify-between items-center">
-                      <span>
-                        <span className="font-bold">Текущая позиция:</span> предложение {currentSentenceIndex + 1} из {sentences.length}
-                      </span>
-                      <button
-                        onClick={() => {
-                          setCurrentSentenceIndex(0);
-                          setTimeout(() => scrollToCurrentSentence(), 100);
-                        }}
-                        className="text-xs px-3 py-1 bg-blue-100 hover:bg-blue-200 rounded transition-colors"
-                      >
-                        Начать сначала
-                      </button>
-                    </div>
+                {isTextLoaded && sentences.length === 0 && (
+                  <div className="text-center py-12 text-gray-500">
+                    <p className="text-lg mb-2">Текст книги пуст или не удалось разобрать</p>
+                    <p className="text-sm">Попробуйте загрузить другую книгу</p>
                   </div>
                 )}
                 
@@ -227,27 +203,18 @@ export const SessionView: React.FC<SessionViewProps> = ({
                           key={index}
                           ref={isCurrent ? currentSentenceRef : null}
                           className={`
-                            relative inline-block px-1.5 py-0.5 transition-all duration-200
+                            relative inline-block px-1.5 py-0.5 cursor-pointer
                             ${isCurrent 
-                              ? 'bg-yellow-200 rounded shadow-sm border border-yellow-300' 
+                              ? 'bg-yellow-200 rounded border border-yellow-300' 
                               : isVisited 
                                 ? 'text-gray-700' 
                                 : 'text-gray-900'}
-                            hover:bg-gray-50 cursor-pointer mx-0.5
+                            hover:bg-gray-50
                           `}
-                          onClick={() => {
-                            setCurrentSentenceIndex(index);
-                            setTimeout(() => scrollToCurrentSentence(), 50);
-                          }}
-                          title={isCurrent ? "Текущее предложение" : "Нажмите для перехода"}
+                          onClick={() => handleJumpToSentence(index)}
                         >
                           {sentence}
                           {index < sentences.length - 1 && ' '}
-                          
-                          {/* Индикатор посещенного предложения */}
-                          {isVisited && !isCurrent && (
-                            <span className="absolute -left-1 top-1/2 w-1 h-1 bg-blue-500 rounded-full transform -translate-y-1/2"></span>
-                          )}
                         </span>
                       );
                     })}

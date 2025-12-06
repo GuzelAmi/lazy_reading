@@ -1,8 +1,9 @@
+# app/auth.py
 from passlib.context import CryptContext
 import jwt
 from datetime import datetime, timedelta
 
-SECRET_KEY = "YOUR_SECRET_KEY"
+SECRET_KEY = "development-secret-key-change-in-production"
 ALGORITHM = "HS256"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -13,7 +14,7 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-def create_access_token(data: dict, expires_delta: timedelta = timedelta(hours=1)):
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(hours=24)):
     to_encode = data.copy()
     expire = datetime.utcnow() + expires_delta
     to_encode.update({"exp": expire})

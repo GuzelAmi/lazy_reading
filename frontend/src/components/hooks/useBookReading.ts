@@ -1,11 +1,10 @@
-// hooks/useBookReading.ts
+// hooks/useBookReading.ts - исправляем эффекты
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { SessionItem } from '../../types';
-import { booksService, sessionsService } from '../../services';
+import { booksService } from '../../services/books';
+import { sessionsService } from '../../services/sessions';
 
 interface UseBookReadingReturn {
-  // Состояния
-  bookText: string;
   sentences: string[];
   currentSentenceIndex: number;
   visitedSentences: Set<number>;
@@ -14,16 +13,11 @@ interface UseBookReadingReturn {
   textContainerRef: React.RefObject<HTMLDivElement>;
   currentSentenceRef: React.RefObject<HTMLSpanElement>;
   
-  // Функции
   setCurrentSentenceIndex: (index: number) => void;
   loadBookData: () => Promise<void>;
-  cleanText: (text: string) => string;
-  splitIntoSentences: (text: string) => string[];
-  scrollToCurrentSentence: () => void;
 }
 
 export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BOOK' | 'SUMMARY'): UseBookReadingReturn => {
-  const [bookText, setBookText] = useState<string>('');
   const [sentences, setSentences] = useState<string[]>([]);
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number>(0);
   const [visitedSentences, setVisitedSentences] = useState<Set<number>>(new Set());
@@ -32,44 +26,34 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
   
   const currentSentenceRef = useRef<HTMLSpanElement>(null);
   const textContainerRef = useRef<HTMLDivElement>(null);
-  const isSavingRef = useRef<boolean>(false);
-  const hasRestoredPositionRef = useRef<boolean>(false);
+  const lastSessionIdRef = useRef<number | null>(null); // Запоминаем последнюю загруженную сессию
+  
+  // === ИЗМЕНЕНИЕ 1: Добавляем рефы для плавной анимации скролла ===
+  const scrollAnimationRef = useRef<number | null>(null);
+  const lastScrollTimeRef = useRef<number>(0);
+  const isInitialScrollDoneRef = useRef<boolean>(false); // Флаг, что первоначальный скролл выполнен
 
-  // Сохраняем позицию в БД с дебаунсом
-  const savePositionToDB = useCallback(async (sessionId: number, position: number) => {
-    if (isSavingRef.current) return;
-    
-    isSavingRef.current = true;
-    try {
-      await sessionsService.updateSessionPosition(sessionId, position);
-    } catch (error) {
-      console.error('Error saving position:', error);
-    } finally {
-      isSavingRef.current = false;
+  // === ИЗМЕНЕНИЕ 2: Функция плавной прокрутки к элементу ===
+  const scrollToElementSmooth = useCallback((element: HTMLElement, container: HTMLElement) => {
+    // Отменяем предыдущую анимацию, если есть
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current);
     }
-  }, []);
 
-  // Плавная прокрутка к текущему предложению
-  const scrollToCurrentSentence = useCallback(() => {
-    if (!currentSentenceRef.current || !textContainerRef.current) return;
-    
-    const sentenceElement = currentSentenceRef.current;
-    const container = textContainerRef.current;
-    
-    // Отменяем предыдущую анимацию
-    if ((window as any).scrollAnimation) {
-      cancelAnimationFrame((window as any).scrollAnimation);
-    }
-    
+    const now = Date.now();
+    // Ограничиваем частоту скролла (не чаще чем каждые 50мс)
+    if (now - lastScrollTimeRef.current < 50) return;
+    lastScrollTimeRef.current = now;
+
     const startTime = Date.now();
-    const duration = 500; // Плавная анимация 500ms
+    const duration = 400; // 400ms для плавности
     const startScrollTop = container.scrollTop;
-    const sentenceTop = sentenceElement.offsetTop;
+    const elementTop = element.offsetTop;
+    const elementHeight = element.offsetHeight;
     const containerHeight = container.clientHeight;
-    const sentenceHeight = sentenceElement.offsetHeight;
     
-    // Целевая позиция - предложение в центре контейнера
-    const targetScrollTop = sentenceTop - (containerHeight / 2) + (sentenceHeight / 2);
+    // Целевая позиция - центр предложения в центре контейнера
+    const targetScrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
     
     const animateScroll = () => {
       const elapsed = Date.now() - startTime;
@@ -88,95 +72,74 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
       container.scrollTop = currentScrollTop;
       
       if (progress < 1) {
-        (window as any).scrollAnimation = requestAnimationFrame(animateScroll);
+        scrollAnimationRef.current = requestAnimationFrame(animateScroll);
       } else {
-        (window as any).scrollAnimation = null;
+        scrollAnimationRef.current = null;
       }
     };
     
-    (window as any).scrollAnimation = requestAnimationFrame(animateScroll);
-  }, []);
-
-  // Очистка текста от HTML и рекламы
-  const cleanText = useCallback((text: string): string => {
-    if (!text) return '';
-    
-    let cleaned = text.replace(/<[^>]*>/g, '');
-    
-    const royallibPatterns = [
-      /Спасибо, что скачали книгу в бесплатной электронной библиотеке Royallib\.ru.*/g,
-      /Все книги автора:.*/g,
-      /Эта же книга в других форматах:.*/g,
-      /Приятного чтения!.*/g,
-      /http:\/\/royallib\.ru.*/g,
-      /Приправа: \d+%.*/g,
-      /Предложение \d+ из \d+/g,
-      /Предыдущее.*/g,
-      /Следующее.*/g,
-      /Кликните чтобы выделить это предложение.*/g,
-      /Статистика чтения.*/g,
-      /Выделенных предложений.*/g,
-      /Осталось прочитать.*/g,
-      /\|.*\|/g,
-    ];
-    
-    royallibPatterns.forEach(pattern => {
-      cleaned = cleaned.replace(pattern, '');
-    });
-    
-    return cleaned.trim();
-  }, []);
-
-  // Разбиение текста на предложения
-  const splitIntoSentences = useCallback((text: string): string[] => {
-    if (!text) return [];
-    
-    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
-    
-    return sentences
-      .map(s => s.trim())
-      .filter(s => s.length > 3);
+    scrollAnimationRef.current = requestAnimationFrame(animateScroll);
   }, []);
 
   // Загрузка данных книги
   const loadBookData = useCallback(async () => {
     if (!activeSession) return;
 
+    // Если уже загружали эту сессию, не загружаем заново
+    if (lastSessionIdRef.current === activeSession.id && isTextLoaded) {
+      return;
+    }
+
     try {
       setLoading(true);
-      hasRestoredPositionRef.current = false;
+      lastSessionIdRef.current = activeSession.id;
+      isInitialScrollDoneRef.current = false; // Сбрасываем флаг скролла
       
-      // Загружаем информацию о сессии (чтобы получить сохраненную позицию)
-      const sessionInfo = await sessionsService.getSession(activeSession.session_id);
-      
+      // Загружаем текст книги
       const rawText = await booksService.getBookText(activeSession.book_id);
-      const cleanedText = cleanText(rawText);
-      setBookText(cleanedText);
       
-      const sentenceArray = splitIntoSentences(cleanedText);
-      setSentences(sentenceArray);
+      // Очищаем текст
+      let cleanedText = rawText.replace(/<[^>]*>/g, '');
+      
+      // Убираем рекламу
+      const patterns = [
+        /Спасибо, что скачали книгу в бесплатной электронной библиотеке Royallib\.ru.*/g,
+        /Все книги автора:.*/g,
+        /Эта же книга в других форматах:.*/g,
+        /Приятного чтения!.*/g,
+        /http:\/\/royallib\.ru.*/g,
+        /Приправа: \d+%.*/g,
+        /Предложение \d+ из \d+/g,
+      ];
+      
+      patterns.forEach(pattern => {
+        cleanedText = cleanedText.replace(pattern, '');
+      });
+      
+      // Разбиваем на предложения
+      const sentences = cleanedText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+      const filteredSentences = sentences
+        .map(s => s.trim())
+        .filter(s => s.length > 3);
+      
+      setSentences(filteredSentences);
       setIsTextLoaded(true);
       
-      // Восстанавливаем сохраненную позицию из БД
-      const savedPosition = sessionInfo.current_position || 0;
-      
-      // Проверяем валидность позиции
+      // Восстанавливаем позицию из сессии
+      const savedPosition = activeSession.current_position || 0;
       let initialPosition = 0;
-      if (savedPosition > 0 && savedPosition < sentenceArray.length) {
+      
+      if (savedPosition >= 0 && savedPosition < filteredSentences.length) {
         initialPosition = savedPosition;
-        console.log(`Восстановлена позиция: ${initialPosition}/${sentenceArray.length}`);
-      } else if (savedPosition >= sentenceArray.length) {
-        // Если позиция больше количества предложений, ставим на последнее
-        initialPosition = Math.max(0, sentenceArray.length - 1);
-        console.log(`Позиция скорректирована: ${initialPosition}`);
+      } else if (savedPosition >= filteredSentences.length) {
+        initialPosition = Math.max(0, filteredSentences.length - 1);
       }
       
       setCurrentSentenceIndex(initialPosition);
-      hasRestoredPositionRef.current = true;
       
-      // Загружаем существующие выделения
+      // Загружаем выделения
       try {
-        const existingHighlights = await sessionsService.getSessionHighlights(activeSession.session_id);
+        const existingHighlights = await sessionsService.getSessionHighlights(activeSession.id);
         const visitedSet = new Set(existingHighlights.map(h => h.sentence_index));
         setVisitedSentences(visitedSet);
       } catch (error) {
@@ -186,35 +149,37 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
       
     } catch (error) {
       console.error('Ошибка загрузки данных книги:', error);
-      setBookText('Ошибка загрузки текста книги.');
+      setSentences(['Ошибка загрузки текста книги.']);
     } finally {
       setLoading(false);
     }
-  }, [activeSession, cleanText, splitIntoSentences]);
+  }, [activeSession]);
 
-  // Прокрутка к восстановленной позиции после загрузки
+  // Сохранение позиции в БД при изменении - БЕЗ ОБНОВЛЕНИЯ UI!
   useEffect(() => {
-    if (isTextLoaded && hasRestoredPositionRef.current && currentSentenceIndex >= 0 && sentences.length > 0) {
-      // Ждем немного чтобы DOM успел отрендериться
-      const timer = setTimeout(() => {
-        if (currentSentenceRef.current && textContainerRef.current) {
-          console.log(`Прокрутка к предложению ${currentSentenceIndex}`);
-          scrollToCurrentSentence();
-        }
-      }, 300);
+    const savePosition = async () => {
+      if (!activeSession || !isTextLoaded || sentences.length === 0) return;
       
-      return () => clearTimeout(timer);
-    }
-  }, [isTextLoaded, currentSentenceIndex, sentences.length, scrollToCurrentSentence]);
+      try {
+        await sessionsService.updateSessionPosition(activeSession.id, currentSentenceIndex);
+      } catch (error) {
+        console.error('Ошибка сохранения позиции:', error);
+      }
+    };
 
-  // Сохранение посещенного предложения
+    // Дебаунс сохранения позиции (сохраняем только после 1 секунды бездействия)
+    const timer = setTimeout(savePosition, 1000);
+    return () => clearTimeout(timer);
+  }, [currentSentenceIndex, activeSession, isTextLoaded, sentences.length]);
+
+  // Сохранение выделений при посещении предложения
   useEffect(() => {
     const saveVisitedSentence = async () => {
       if (!activeSession || !isTextLoaded || visitedSentences.has(currentSentenceIndex)) return;
       
       try {
         const sentenceText = sentences[currentSentenceIndex];
-        await sessionsService.addHighlight(activeSession.session_id, {
+        await sessionsService.addHighlight(activeSession.id, {
           sentence_index: currentSentenceIndex,
           text: sentenceText
         });
@@ -228,31 +193,100 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
     saveVisitedSentence();
   }, [currentSentenceIndex, activeSession, isTextLoaded, sentences, visitedSentences]);
 
-  // Сохранение позиции в БД при изменении
+  // === ИЗМЕНЕНИЕ 3: Улучшенный эффект для первоначального скролла ===
   useEffect(() => {
-    if (activeSession && isTextLoaded && currentSentenceIndex >= 0) {
-      // Сохраняем с дебаунсом 500ms
+    if (isTextLoaded && 
+        currentSentenceIndex >= 0 && 
+        sentences.length > 0 && 
+        !isInitialScrollDoneRef.current) {
+      
+      const attemptScroll = () => {
+        if (currentSentenceRef.current && textContainerRef.current) {
+          // Первоначальный скролл делаем сразу, без задержки
+          scrollToElementSmooth(currentSentenceRef.current, textContainerRef.current);
+          isInitialScrollDoneRef.current = true;
+          return true;
+        }
+        return false;
+      };
+
+      // Пытаемся сразу
+      if (!attemptScroll()) {
+        // Если не получилось, пробуем через небольшой интервал
+        const intervalId = setInterval(() => {
+          if (attemptScroll()) {
+            clearInterval(intervalId);
+          }
+        }, 50); // Проверяем каждые 50мс
+
+        // Останавливаем попытки через 2 секунды
+        setTimeout(() => {
+          clearInterval(intervalId);
+        }, 2000);
+
+        return () => clearInterval(intervalId);
+      }
+    }
+  }, [isTextLoaded, currentSentenceIndex, sentences.length, scrollToElementSmooth]);
+
+  // === ИЗМЕНЕНИЕ 4: Эффект для последующего скролла (при навигации) ===
+  useEffect(() => {
+    // Этот эффект срабатывает только после первоначального скролла
+    if (isTextLoaded && 
+        currentSentenceIndex >= 0 && 
+        sentences.length > 0 && 
+        isInitialScrollDoneRef.current &&
+        currentSentenceRef.current && 
+        textContainerRef.current) {
+      
+      // Для последующих изменений используем задержку
       const timer = setTimeout(() => {
-        savePositionToDB(activeSession.session_id, currentSentenceIndex);
-      }, 500);
+        if (currentSentenceRef.current && textContainerRef.current) {
+          scrollToElementSmooth(currentSentenceRef.current, textContainerRef.current);
+        }
+      }, 50);
       
       return () => clearTimeout(timer);
     }
-  }, [currentSentenceIndex, activeSession, isTextLoaded, savePositionToDB]);
+  }, [isTextLoaded, currentSentenceIndex, sentences.length, scrollToElementSmooth]);
 
-  // Загрузка при изменении активной сессии
+  // === ИЗМЕНЕНИЕ 5: Очистка анимации и сброс флагов при смене сессии ===
   useEffect(() => {
-    if (activeSession && activeTab === 'BOOK') {
-      loadBookData();
-    }
-  }, [activeSession, activeTab, loadBookData]);
-
-  const setCurrentSentenceIndexWithSave = useCallback((index: number) => {
-    setCurrentSentenceIndex(index);
+    return () => {
+      if (scrollAnimationRef.current) {
+        cancelAnimationFrame(scrollAnimationRef.current);
+      }
+    };
   }, []);
 
+  // Сбрасываем флаг скролла при смене активной сессии
+  useEffect(() => {
+    isInitialScrollDoneRef.current = false;
+  }, [activeSession?.id]);
+
+  // Загрузка при изменении активной сессии или вкладки - УЛУЧШАЕМ
+  useEffect(() => {
+    if (activeSession && activeTab === 'BOOK') {
+      // Если уже загружали эту сессию, просто восстанавливаем позицию
+      if (lastSessionIdRef.current === activeSession.id && isTextLoaded) {
+        const savedPosition = activeSession.current_position || 0;
+        if (savedPosition >= 0 && savedPosition < sentences.length) {
+          setCurrentSentenceIndex(savedPosition);
+        }
+      } else {
+        // Иначе загружаем данные
+        loadBookData();
+      }
+    }
+  }, [activeSession, activeTab, isTextLoaded, sentences.length, loadBookData]);
+
+  // Функция для установки позиции с проверкой границ
+  const setCurrentSentenceIndexWithBounds = useCallback((index: number) => {
+    const newIndex = Math.max(0, Math.min(index, sentences.length - 1));
+    setCurrentSentenceIndex(newIndex);
+  }, [sentences.length]);
+
   return {
-    bookText,
     sentences,
     currentSentenceIndex,
     visitedSentences,
@@ -260,10 +294,7 @@ export const useBookReading = (activeSession: SessionItem | null, activeTab: 'BO
     isTextLoaded,
     textContainerRef,
     currentSentenceRef,
-    setCurrentSentenceIndex: setCurrentSentenceIndexWithSave,
+    setCurrentSentenceIndex: setCurrentSentenceIndexWithBounds,
     loadBookData,
-    cleanText,
-    splitIntoSentences,
-    scrollToCurrentSentence,
   };
 };

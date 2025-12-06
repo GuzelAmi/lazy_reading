@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, LargeBinary, ForeignKey
+# app/models.py
+from sqlalchemy import Column, Integer, String, LargeBinary, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -16,14 +17,12 @@ class Book(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
-    author = Column(String, index=True)
+    author = Column(String, index=True, nullable=True)
     content = Column(LargeBinary)
     owner_id = Column(Integer, ForeignKey("users.id"))
 
     owner = relationship("User", back_populates="books")
 
-# app/models.py
-# app/models.py
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -31,15 +30,7 @@ class Session(Base):
     name = Column(String)
     book_id = Column(Integer, ForeignKey("books.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
-    current_position = Column(Integer, default=0)  # Новое поле
-
-
-class Summary(Base):
-    __tablename__ = "summaries"
-
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey("sessions.id"))
-    content = Column(String)
+    current_position = Column(Integer, default=0)
 
 class Highlight(Base):
     __tablename__ = "highlights"
@@ -47,4 +38,11 @@ class Highlight(Base):
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("sessions.id"))
     sentence_index = Column(Integer)
-    text = Column(String)
+    text = Column(Text)
+
+class Summary(Base):
+    __tablename__ = "summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"))
+    content = Column(Text)

@@ -6,8 +6,7 @@ interface UseKeyboardNavigationProps {
   isTextLoaded: boolean;
   sentencesLength: number;
   currentSentenceIndex: number;
-  setCurrentSentenceIndex: (index: number | ((prev: number) => number)) => void;
-  scrollToCurrentSentence?: () => void;
+  setCurrentSentenceIndex: (index: number) => void;
 }
 
 export const useKeyboardNavigation = ({
@@ -16,20 +15,24 @@ export const useKeyboardNavigation = ({
   sentencesLength,
   currentSentenceIndex,
   setCurrentSentenceIndex,
-  scrollToCurrentSentence,
 }: UseKeyboardNavigationProps) => {
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Только для вкладки книги с загруженным текстом
-      if (activeTab !== 'BOOK' || !isTextLoaded) return;
+      if (activeTab !== 'BOOK' || !isTextLoaded || sentencesLength === 0) return;
       
-      // Блокируем нажатия при фокусе на инпутах, textarea и т.д.
-      if (e.target instanceof HTMLInputElement || 
-          e.target instanceof HTMLTextAreaElement ||
-          e.target instanceof HTMLSelectElement) {
+      // Блокируем нажатия при фокусе на инпутах
+      const activeElement = document.activeElement;
+      if (activeElement && (
+        activeElement.tagName === 'INPUT' || 
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.tagName === 'SELECT'
+      )) {
         return;
       }
+      
+      let newIndex = currentSentenceIndex;
       
       switch(e.key.toLowerCase()) {
         case 'arrowright':
@@ -37,14 +40,7 @@ export const useKeyboardNavigation = ({
         case 'd':
           e.preventDefault();
           if (currentSentenceIndex < sentencesLength - 1) {
-            setCurrentSentenceIndex(prev => {
-              const newIndex = prev + 1;
-              // Прокручиваем после обновления
-              setTimeout(() => {
-                scrollToCurrentSentence?.();
-              }, 10);
-              return newIndex;
-            });
+            newIndex = currentSentenceIndex + 1;
           }
           break;
           
@@ -52,47 +48,37 @@ export const useKeyboardNavigation = ({
         case 'a':
           e.preventDefault();
           if (currentSentenceIndex > 0) {
-            setCurrentSentenceIndex(prev => {
-              const newIndex = prev - 1;
-              setTimeout(() => {
-                scrollToCurrentSentence?.();
-              }, 10);
-              return newIndex;
-            });
+            newIndex = currentSentenceIndex - 1;
           }
           break;
           
         case 'home':
           e.preventDefault();
-          setCurrentSentenceIndex(0);
-          setTimeout(() => {
-            scrollToCurrentSentence?.();
-          }, 10);
+          newIndex = 0;
           break;
           
         case 'end':
           e.preventDefault();
-          setCurrentSentenceIndex(sentencesLength - 1);
-          setTimeout(() => {
-            scrollToCurrentSentence?.();
-          }, 10);
+          newIndex = sentencesLength - 1;
           break;
           
         case 'j':
           e.preventDefault();
-          setCurrentSentenceIndex(prev => Math.min(prev + 10, sentencesLength - 1));
-          setTimeout(() => {
-            scrollToCurrentSentence?.();
-          }, 10);
+          newIndex = Math.min(currentSentenceIndex + 10, sentencesLength - 1);
           break;
           
         case 'k':
           e.preventDefault();
-          setCurrentSentenceIndex(prev => Math.max(prev - 10, 0));
-          setTimeout(() => {
-            scrollToCurrentSentence?.();
-          }, 10);
+          newIndex = Math.max(currentSentenceIndex - 10, 0);
           break;
+          
+        default:
+          return;
+      }
+      
+      // Меняем позицию только если она изменилась
+      if (newIndex !== currentSentenceIndex) {
+        setCurrentSentenceIndex(newIndex);
       }
     };
 
@@ -101,5 +87,5 @@ export const useKeyboardNavigation = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [activeTab, isTextLoaded, sentencesLength, currentSentenceIndex, setCurrentSentenceIndex, scrollToCurrentSentence]);
+  }, [activeTab, isTextLoaded, sentencesLength, currentSentenceIndex, setCurrentSentenceIndex]);
 };

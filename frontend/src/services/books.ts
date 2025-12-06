@@ -1,3 +1,4 @@
+// services/books.ts
 import api from './api';
 
 export interface Book {
@@ -5,7 +6,6 @@ export interface Book {
   title: string;
   author: string | null;
   owner_id: number;
-  session_id?: number;
 }
 
 export interface UploadBookData {
@@ -14,20 +14,13 @@ export interface UploadBookData {
   file: File;
 }
 
-export interface BookUploadResponse {
-  id: number;
-  title: string;
-  author: string | null;
-  session_id: number;
-}
-
 export const booksService = {
   getBooks: async (): Promise<Book[]> => {
     const response = await api.get('/books/');
     return response.data;
   },
 
-  uploadBook: async (data: UploadBookData): Promise<BookUploadResponse> => {
+  uploadBook: async (data: UploadBookData): Promise<Book> => {
     const formData = new FormData();
     formData.append('book_file', data.file);
     formData.append('title', data.title);
@@ -40,11 +33,6 @@ export const booksService = {
         'Content-Type': 'multipart/form-data',
       },
     });
-    return response.data;
-  },
-
-  getBook: async (bookId: number): Promise<Book> => {
-    const response = await api.get(`/books/${bookId}`);
     return response.data;
   },
 
